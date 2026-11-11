@@ -1,0 +1,165 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{db}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function me() { return get(/databases/$(db)/documents/users/$(request.auth.uid)).data; }
+    function isActive() { return signedIn() && me().status != 'disabled'; }
+    function isAdmin() { return isActive() && me().role == 'Administrator'; }
+    // A HOD is the admin of their own department, for staff and students.
+    function isHod() { return isActive() && me().role == 'HOD'; }
+    function staffRole(r) {
+      return r in ['Professor', 'Associate Professor', 'Assistant Professor',
+                   'Lab Assistant', 'Assistant', 'Student'];
+    }
+    function hodCanManage(u) {
+      return isHod() && u.department == me().department && staffRole(u.role);
+    }
+    function validRole(r) {
+      return r in ['HOD', 'Professor', 'Associate Professor', 'Assistant Professor',
+                   'Lab Assistant', 'Assistant', 'Student', 'Administrator'];
+    }
+    // Anyone above Student can ring (the push server checks the exact
+    // hierarchy: top → bottom). Students can only send requests.
+    function canCall(from) {
+      return from in ['HOD', 'Administrator', 'Professor', 'Associate Professor',
+                      'Assistant Professor', 'Lab Assistant', 'Assistant'];
+    }
+    function isMember(b) {
+      return b.recipientUid == request.auth.uid
+        || ('recipientUids' in b && request.auth.uid in b.recipientUids);
+    }
+
+    match /users/{uid} {
+      allow read: if signedIn();
+      // Self-registration starts active; an Administrator can disable later.
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.status == 'active'
+        && validRole(request.resource.data.role)
+        && request.resource.data.role != 'Administrator';
+      // Users may edit their own profile but never their role, status or
+      // department (chosen at sign-up; an admin can move them).
+      allow update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['name', 'staffId', 'photoUrl', 'fcmTokens', 'prefs', 'lastSeen', 'timetable'])
+        && (!('timetable' in request.resource.data)
+            || request.resource.data.timetable.size() <= 80);
+      allow update: if isAdmin()
+        && (!('role' in request.resource.data) || validRole(request.resource.data.role));
+      // HOD: staff/students of their own department; may change name, ID,
+      // status and role (only between Professor / Assistant / Student),
+      // but can't move them to another department.
+      allow update: if hodCanManage(resource.data)
+        && staffRole(request.resource.data.role)
+        && request.resource.data.department == resource.data.department
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['name', 'staffId', 'status', 'role']);
+      allow delete: if isAdmin() || hodCanManage(resource.data);
+    }
+
+    // App update info (latestBuild, apkUrl, ...). Edited only in the console.
+    match /config/{doc} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Groups (e.g. "Lab assistants"): a HOD manages their own department's
+    // groups; the main administrator manages all.
+    match /groups/{id} {
+      allow read: if signedIn();
+      allow create: if isAdmin()
+        || (isHod()
+            && request.resource.data.department == me().department
+            && request.resource.data.ownerUid == request.auth.uid);
+      allow update: if isAdmin()
+        || (isHod()
+            && resource.data.department == me().department
+            && request.resource.data.department == resource.data.department);
+      allow delete: if isAdmin()
+        || (isHod() && resource.data.department == me().department);
+    }
+
+    // Notices: a HOD posts to their own department, the main administrator
+    // to any department or everyone (department ""). Readers may only add
+    // themselves to seenBy.
+    match /announcements/{id} {
+      allow read: if signedIn();
+      allow create: if isActive()
+        && request.resource.data.senderUid == request.auth.uid
+        && (isAdmin()
+            || (isHod() && request.resource.data.department == me().department))
+        && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.title.size() <= 80
+        && request.resource.data.message is string
+        && request.resource.data.message.size() <= 500
+        && request.resource.data.seenBy == [];
+      allow update: if signedIn()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['seenBy'])
+        && request.resource.data.seenBy.toSet()
+             == resource.data.seenBy.toSet().union([request.auth.uid].toSet());
+      allow delete: if signedIn()
+        && (resource.data.senderUid == request.auth.uid || isAdmin());
+    }
+
+    // Profile photo (small JPEG as base64). Only the owner writes it.
+    match /photos/{uid} {
+      allow read: if signedIn();
+      allow write: if signedIn() && request.auth.uid == uid
+        && (request.resource == null
+            || (request.resource.data.b64 is string
+                && request.resource.data.b64.size() < 300000));
+      allow delete: if signedIn() && (request.auth.uid == uid || isAdmin());
+    }
+
+    // username -> {uid, email}, so people can sign in with a username.
+    // Anyone may look up one name (sign-in screen); listing is not allowed.
+    match /usernames/{name} {
+      allow get: if true;
+      allow create: if signedIn()
+        && request.resource.data.uid == request.auth.uid
+        && name.matches('^[a-z0-9_.]{3,20}$');
+      allow delete: if signedIn() && resource.data.uid == request.auth.uid;
+    }
+
+    match /bell_requests/{id} {
+      // Sender, recipient, or an Administrator (admin portal) can read.
+      allow read: if signedIn()
+        && (resource.data.senderUid == request.auth.uid
+            || isMember(resource.data)
+            || isAdmin());
+
+      allow create: if isActive()
+        && request.resource.data.senderUid == request.auth.uid
+        && request.resource.data.senderRole == me().role
+        // ring: top → bottom; request: anyone (bottom → top, checked by server)
+        && (request.resource.data.get('kind', 'bell') == 'request'
+            || canCall(me().role))
+        && (!('recipientUids' in request.resource.data)
+            || request.resource.data.recipientUids.size() <= 100)
+        && request.resource.data.status == 'pending'
+        && request.resource.data.message is string
+        && request.resource.data.message.size() <= 200;
+
+      // The recipient (or, for a group bell, any member) may answer once:
+      // accepted / declined (+ reason). The first answer wins, because the
+      // status must still be pending / delivered. claimedBy must be yourself.
+      allow update: if signedIn()
+        && isMember(resource.data)
+        && resource.data.status in ['pending', 'delivered']
+        && request.resource.data.status in ['accepted', 'declined']
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['status', 'reason', 'respondedAt', 'claimedBy', 'claimedByName'])
+        && (!('claimedBy' in request.resource.data)
+            || request.resource.data.claimedBy == request.auth.uid)
+        && (!('reason' in request.resource.data)
+            || request.resource.data.reason == null
+            || (request.resource.data.reason is string
+                && request.resource.data.reason.size() <= 100));
+
+      // Sender may delete their own request.
+      allow delete: if signedIn()
+        && resource.data.senderUid == request.auth.uid;
+    }
+  }
+}

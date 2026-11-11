@@ -1,0 +1,46 @@
+{
+  "project_info": {
+    "project_number": "841841228567",
+    "project_id": "alaram-bell-fcdb2",
+    "storage_bucket": "alaram-bell-fcdb2.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:841841228567:android:aa423103972aa2e5ee1552",
+        "android_client_info": {
+          "package_name": "com.hodcall.alaram_bell"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "841841228567-cf9tg5ibc0nt2o41cel3v9l5cek08esg.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCkbDxUP0b1sVXGgtcVeRqlziVdca3VbLY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "841841228567-cf9tg5ibc0nt2o41cel3v9l5cek08esg.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "841841228567-mdpjdqbujdi9og1jlm8svhkjkcs8tq8q.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.hodcall.alaramBell"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

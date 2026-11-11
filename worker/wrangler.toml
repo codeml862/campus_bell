@@ -1,0 +1,12 @@
+name = "campusbell-push"
+main = "src/index.js"
+compatibility_date = "2025-06-01"
+workers_dev = true
+
+[vars]
+PROJECT_ID = "alaram-bell-fcdb2"
+
+# Secret (never commit): set with
+#   npx wrangler secret put FIREBASE_SERVICE_ACCOUNT
+# and paste the whole service-account JSON from
+# Firebase Console > Project settings > Service accounts > Generate new private key.
