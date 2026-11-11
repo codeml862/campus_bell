@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Folder the app copies its own APK into before sharing it. -->
+<paths>
+    <cache-path name="share" path="share/" />
+</paths>
