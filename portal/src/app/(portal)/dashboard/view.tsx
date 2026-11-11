@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import Link from "next/link";
 import { ArrowRight, BellRing, CheckCircle2, ShieldCheck, Users } from "lucide-react";
 
@@ -16,14 +16,17 @@ import {
 } from "@/components/layout/page";
 import { StatusBadge, UserAvatar } from "@/components/common";
 
+let loadedAt: Date | null = null;
+const clientNow = () => (loadedAt ??= new Date());
+const noop = () => () => {};
+
 export default function DashboardView() {
   const { profile, scopeDept, isHod, user } = useAdmin();
   const users = useUsers();
   const bells = useBells(500, isHod ? user?.uid : undefined);
 
-  // "Today" is read on the client after mount (not during prerender).
-  const [now, setNow] = useState<Date | null>(null);
-  useEffect(() => setNow(new Date()), []);
+  // "Today" is read on the client only (null during prerender).
+  const now = useSyncExternalStore(noop, clientNow, () => null);
 
   // HOD: their department only.
   const u = scopeDept
