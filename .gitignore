@@ -74,6 +74,7 @@ android/.gradle/
 android/.kotlin/
 *.apk
 *.aab
+!portal/public/CampusBell.apk
 
 # Flutter obfuscation symbols (keep a copy locally to decode crash logs)
 build/symbols/
