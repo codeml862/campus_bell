@@ -120,6 +120,27 @@ npm run build
 
 ---
 
+## Group invitations
+
+Group invitations use `https://campus-bell-seven.vercel.app/join/<groupId>`.
+The public invitation page opens `campusbell://join/<groupId>` in the installed
+app. Students sign in and finish profile setup before joining automatically;
+only active students in the group's department can join. Teachers can create
+groups, and group admins can add/remove members and grant/revoke group admin
+access. These permissions do not change a person's CampusBell role.
+
+Deploy `firestore.rules`, the `portal/` invitation route, and `worker/` together
+with the updated mobile app. Group admin push permissions require the updated
+worker. If the portal domain changes, update `GroupLinks.host` in
+`lib/services/group_links.dart`.
+
+Validate group permissions locally with the Firebase CLI and Java 21:
+
+```bash
+flutter test
+firebase emulators:exec --only firestore --project demo-campusbell "node test/firestore_rules_test.mjs"
+```
+
 ## Project layout
 
 ```

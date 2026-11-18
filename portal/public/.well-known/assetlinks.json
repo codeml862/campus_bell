@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.hodcall.alaram_bell",
+      "sha256_cert_fingerprints": [
+        "4D:CC:D2:8D:2D:FE:FF:C8:F8:02:0C:A8:38:06:2F:10:C3:FD:25:B0:7B:DD:F9:82:BC:0B:81:41:B4:67:44:06"
+      ]
+    }
+  }
+]

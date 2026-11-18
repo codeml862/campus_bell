@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 
 import '../../core/theme.dart';
 import '../../models/models.dart';
+import '../../services/services.dart';
 import '../../widgets/cb.dart';
 import '../../widgets/common.dart';
 import '../../widgets/ios.dart';
@@ -12,7 +13,7 @@ import '../home/home_screen.dart';
 import '../../widgets/photo.dart';
 
 /// Another person's profile: photo + name, quick actions (Ring, Message,
-/// Request, Email), their details and today's classes.
+/// Request), department, ID and today's classes.
 class UserDetailsScreen extends StatelessWidget {
   final AppUser me, user;
   const UserDetailsScreen({super.key, required this.me, required this.user});
@@ -21,16 +22,21 @@ class UserDetailsScreen extends StatelessWidget {
       Navigator.push(context, iosRoute(page));
 
   @override
-  Widget build(BuildContext context) {
-    final u = user;
+  Widget build(BuildContext context) => StreamBuilder(
+    stream: usersCol.doc(user.uid).snapshots(),
+    builder: (context, snapshot) => _buildProfile(
+      context,
+      snapshot.hasData && snapshot.data!.exists
+          ? AppUser.fromDoc(snapshot.data!)
+          : user,
+    ),
+  );
+
+  Widget _buildProfile(BuildContext context, AppUser u) {
     final canRing = Roles.canCall(me.role, u.role);
     final canRequest = Roles.canRequest(me.role, u.role);
+    final showEmail = me.canViewEmailOf(u) && u.email.isNotEmpty;
     final top = MediaQuery.paddingOf(context).top;
-
-    void copy(String what, String text) {
-      Clipboard.setData(ClipboardData(text: text));
-      showSnack(context, '$what copied');
-    }
 
     final actions = <Widget>[
       if (canRing) ...[
@@ -54,11 +60,15 @@ class UserDetailsScreen extends StatelessWidget {
           primary: true,
           onTap: () => _open(context, CallScreen(me: me, to: u, request: true)),
         ),
-      _Action(
-        icon: CupertinoIcons.mail_solid,
-        label: 'Email',
-        onTap: () => copy('Email', u.email),
-      ),
+      if (showEmail)
+        _Action(
+          icon: CupertinoIcons.mail_solid,
+          label: 'Email',
+          onTap: () async {
+            await Clipboard.setData(ClipboardData(text: u.email));
+            if (context.mounted) showSnack(context, 'Email copied');
+          },
+        ),
     ];
 
     final today = u.timetable
@@ -162,20 +172,11 @@ class UserDetailsScreen extends StatelessWidget {
             _Section(
               title: 'Details',
               children: [
-                _InfoRow(
-                  icon: CupertinoIcons.mail,
-                  label: 'Email',
-                  value: u.email,
-                  onTap: () => copy('Email', u.email),
-                  trailing: CupertinoIcons.doc_on_doc,
-                ),
-                if (u.username != null)
+                if (showEmail)
                   _InfoRow(
-                    icon: CupertinoIcons.at,
-                    label: 'Username',
-                    value: '@${u.username}',
-                    onTap: () => copy('Username', '@${u.username}'),
-                    trailing: CupertinoIcons.doc_on_doc,
+                    icon: CupertinoIcons.mail,
+                    label: 'Email',
+                    value: u.email,
                   ),
                 _InfoRow(
                   icon: CupertinoIcons.number,
@@ -323,55 +324,45 @@ class _Section extends StatelessWidget {
 class _InfoRow extends StatelessWidget {
   final IconData icon;
   final String label, value;
-  final IconData? trailing;
-  final VoidCallback? onTap;
   const _InfoRow({
     required this.icon,
     required this.label,
     required this.value,
-    this.trailing,
-    this.onTap,
   });
   @override
-  Widget build(BuildContext context) => GestureDetector(
-    onTap: onTap,
-    behavior: HitTestBehavior.opaque,
-    child: Padding(
-      padding: const EdgeInsets.symmetric(vertical: 12),
-      child: Row(
-        children: [
-          Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-              color: HomeColors.blueBg,
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(icon, size: 17, color: HomeColors.blue),
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 12),
+    child: Row(
+      children: [
+        Container(
+          width: 34,
+          height: 34,
+          decoration: BoxDecoration(
+            color: HomeColors.blueBg,
+            borderRadius: BorderRadius.circular(10),
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: const TextStyle(fontSize: 12.5, color: HomeColors.sub),
-                ),
-                const SizedBox(height: 1),
-                Text(
-                  value,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 15.5, color: HomeColors.ink),
-                ),
-              ],
-            ),
+          child: Icon(icon, size: 17, color: HomeColors.blue),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: const TextStyle(fontSize: 12.5, color: HomeColors.sub),
+              ),
+              const SizedBox(height: 1),
+              Text(
+                value,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 15.5, color: HomeColors.ink),
+              ),
+            ],
           ),
-          if (trailing != null)
-            Icon(trailing, size: 17, color: HomeColors.muted),
-        ],
-      ),
+        ),
+      ],
     ),
   );
 }

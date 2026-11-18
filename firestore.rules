@@ -8,6 +8,15 @@ service cloud.firestore {
     function isAdmin() { return isActive() && me().role == 'Administrator'; }
     // A HOD is the admin of their own department, for staff and students.
     function isHod() { return isActive() && me().role == 'HOD'; }
+    function isTeacher() {
+      return isActive() && me().role in
+        ['Professor', 'Associate Professor', 'Assistant Professor'];
+    }
+    function managesGroup(g) {
+      return isAdmin() || (g.department == me().department &&
+        (isHod() || g.ownerUid == request.auth.uid
+          || request.auth.uid in g.get('adminUids', [])));
+    }
     function staffRole(r) {
       return r in ['Professor', 'Associate Professor', 'Assistant Professor',
                    'Lab Assistant', 'Assistant', 'Student'];
@@ -63,20 +72,36 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // Groups (e.g. "Lab assistants"): a HOD manages their own department's
-    // groups; the main administrator manages all.
+    // Teachers own groups; HODs manage their department, admins manage all.
     match /groups/{id} {
       allow read: if signedIn();
-      allow create: if isAdmin()
-        || (isHod()
-            && request.resource.data.department == me().department
-            && request.resource.data.ownerUid == request.auth.uid);
-      allow update: if isAdmin()
-        || (isHod()
-            && resource.data.department == me().department
-            && request.resource.data.department == resource.data.department);
-      allow delete: if isAdmin()
-        || (isHod() && resource.data.department == me().department);
+      allow create: if isActive()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.memberUids is list
+        && request.resource.data.memberUids.size() <= 100
+        && request.resource.data.get('adminUids', []) == []
+        && (isAdmin() || ((isHod() || isTeacher())
+            && request.resource.data.department == me().department));
+      allow update: if isActive() && managesGroup(resource.data)
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && request.resource.data.department == resource.data.department
+        && request.resource.data.memberUids is list
+        && request.resource.data.memberUids.size() <= 100
+        && request.resource.data.get('adminUids', []) is list
+        && request.resource.data.get('adminUids', []).toSet()
+          .difference(request.resource.data.memberUids.toSet()).size() == 0
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['name', 'memberUids', 'adminUids', 'updatedAt']);
+      // Link join: a student can add only themselves in their department.
+      // They cannot remove peers, edit the group or grant management access.
+      allow update: if isActive() && me().role == 'Student'
+        && me().department == resource.data.department
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids'])
+        && request.resource.data.memberUids is list
+        && request.resource.data.memberUids.size() <= 100
+        && request.resource.data.memberUids.toSet()
+          == resource.data.memberUids.toSet().union([request.auth.uid].toSet());
+      allow delete: if isActive() && managesGroup(resource.data);
     }
 
     // Notices: a HOD posts to their own department, the main administrator

@@ -105,7 +105,7 @@ class RingGroupScreen extends StatelessWidget {
                         Text(
                           canCreate
                               ? 'Tap + to make one, like "Lab assistants".'
-                              : 'Your HOD can add you to a group.',
+                              : 'Open your teacher’s group link to join.',
                           textAlign: TextAlign.center,
                           style: const TextStyle(
                             fontSize: 14,

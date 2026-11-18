@@ -143,7 +143,8 @@ async function deliverGroup(g, id, bell) {
   if (!group) return fail("rejected", "This group no longer exists.");
   const allowed = sender.role === "Administrator"
     || (sender.role === "HOD" && group.department === sender.department)
-    || group.ownerUid === bell.senderUid;
+    || (group.department === sender.department
+      && (group.ownerUid === bell.senderUid || (group.adminUids || []).includes(bell.senderUid)));
   if (!allowed) return fail("rejected", "You can't ring this group.");
 
   // Only real, active members below the sender, and never the sender.
@@ -152,7 +153,8 @@ async function deliverGroup(g, id, bell) {
   let devices = 0;
   for (const uid of wanted) {
     const m = await g.get(`users/${uid}`);
-    if (!m || m.status === "disabled" || !canCall(sender.role, m.role)) continue;
+    if (!m || m.status === "disabled" || m.department !== group.department
+        || !canCall(sender.role, m.role)) continue;
     const sound = soundFor(m, bell);
     devices += await pushToUser(g, uid, bellPayload(id, bell, sender, sound, {
       groupId: bell.groupId, groupName: group.name || "",

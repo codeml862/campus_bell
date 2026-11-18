@@ -1,9 +1,12 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../core/theme.dart';
 import '../../models/models.dart';
 import '../../services/services.dart';
+import '../../services/group_links.dart';
 import '../../widgets/cb.dart';
 import '../../widgets/common.dart';
 import '../../widgets/ios.dart';
@@ -27,6 +30,20 @@ class GroupScreen extends StatelessWidget {
     return StreamBuilder<List<Group>>(
       stream: GroupService.mine(me),
       builder: (_, snap) {
+        if (snap.hasData && !snap.data!.any((g) => g.id == group.id)) {
+          return Scaffold(
+            backgroundColor: Cb.page,
+            body: SafeArea(
+              child: ListView(
+                padding: const EdgeInsets.all(16),
+                children: const [
+                  CbHeader('Group'),
+                  Text('This group is no longer available to you.'),
+                ],
+              ),
+            ),
+          );
+        }
         final g =
             (snap.data ?? const <Group>[])
                 .where((x) => x.id == group.id)
@@ -36,7 +53,7 @@ class GroupScreen extends StatelessWidget {
             .where((u) => g.memberUids.contains(u.uid))
             .toList();
         final canManage = GroupService.canManage(me, g);
-        final canRing = canManage || g.ownerUid == me.uid;
+        final canRing = GroupService.canRing(me, g);
         return Scaffold(
           backgroundColor: Cb.page,
           body: SafeArea(
@@ -81,6 +98,54 @@ class GroupScreen extends StatelessWidget {
                           pill:
                               '${members.length} member${members.length == 1 ? '' : 's'}',
                         ),
+                        if (canManage) ...[
+                          const CbSection('Invite students'),
+                          CbCard(
+                            children: [
+                              CbItem(
+                                icon: CupertinoIcons.share,
+                                title: 'Share group link',
+                                subtitle:
+                                    'Students in ${g.department} join when they open it.',
+                                onTap: () async {
+                                  try {
+                                    final box =
+                                        context.findRenderObject()
+                                            as RenderBox?;
+                                    await SharePlus.instance.share(
+                                      ShareParams(
+                                        text:
+                                            'Join ${g.name} on CampusBell:\n${GroupLinks.inviteUrl(g.id)}',
+                                        sharePositionOrigin: box == null
+                                            ? null
+                                            : box.localToGlobal(Offset.zero) &
+                                                  box.size,
+                                      ),
+                                    );
+                                  } catch (e) {
+                                    if (context.mounted) {
+                                      showSnack(context, 'Could not share: $e');
+                                    }
+                                  }
+                                },
+                              ),
+                              CbItem(
+                                icon: CupertinoIcons.doc_on_doc,
+                                title: 'Copy group link',
+                                onTap: () async {
+                                  await Clipboard.setData(
+                                    ClipboardData(
+                                      text: GroupLinks.inviteUrl(g.id),
+                                    ),
+                                  );
+                                  if (context.mounted) {
+                                    showSnack(context, 'Group link copied');
+                                  }
+                                },
+                              ),
+                            ],
+                          ),
+                        ],
                         const CbSection('Members'),
                         if (members.isEmpty)
                           const CbCard(
@@ -102,7 +167,14 @@ class GroupScreen extends StatelessWidget {
                                   title: u.uid == me.uid
                                       ? '${u.name} (you)'
                                       : u.name,
-                                  subtitle: u.roleLabel,
+                                  subtitle:
+                                      g.adminUids.contains(u.uid) ||
+                                          g.ownerUid == u.uid
+                                      ? '${u.roleLabel} · Group admin'
+                                      : u.roleLabel,
+                                  onTap: canManage && u.uid != g.ownerUid
+                                      ? () => _memberActions(context, g, u)
+                                      : null,
                                 ),
                             ],
                           ),
@@ -169,6 +241,58 @@ class GroupScreen extends StatelessWidget {
       },
     );
   }
+
+  Future<void> _memberActions(
+    BuildContext context,
+    Group g,
+    AppUser member,
+  ) async {
+    final isAdmin = g.adminUids.contains(member.uid);
+    final action = await showCupertinoModalPopup<String>(
+      context: context,
+      builder: (c) => CupertinoActionSheet(
+        title: Text(member.name),
+        actions: [
+          CupertinoActionSheetAction(
+            onPressed: () => Navigator.pop(c, 'admin'),
+            child: Text(isAdmin ? 'Remove group admin' : 'Make group admin'),
+          ),
+          CupertinoActionSheetAction(
+            isDestructiveAction: true,
+            onPressed: () => Navigator.pop(c, 'remove'),
+            child: const Text('Remove from group'),
+          ),
+        ],
+        cancelButton: CupertinoActionSheetAction(
+          onPressed: () => Navigator.pop(c),
+          child: const Text('Cancel'),
+        ),
+      ),
+    );
+    if (action == null) return;
+    try {
+      if (action == 'admin') {
+        await GroupService.setAdmin(me, g.id, member.uid, !isAdmin);
+      } else {
+        await GroupService.save(
+          me: me,
+          id: g.id,
+          name: g.name,
+          department: g.department,
+          originalMemberUids: g.memberUids,
+          memberUids: g.memberUids.where((uid) => uid != member.uid).toList(),
+        );
+      }
+      if (context.mounted) {
+        showSnack(
+          context,
+          action == 'admin' ? 'Group admin updated.' : 'Member removed.',
+        );
+      }
+    } catch (e) {
+      if (context.mounted) showSnack(context, 'Could not update member: $e');
+    }
+  }
 }
 
 /// Create or edit a group: name + members from the department.
@@ -193,6 +317,12 @@ class _GroupEditScreenState extends State<GroupEditScreen> {
   String _q = '';
   bool _busy = false;
 
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
   Future<void> _save() async {
     if (_name.text.trim().length < 2) {
       showSnack(context, 'Give the group a name.');
@@ -206,6 +336,7 @@ class _GroupEditScreenState extends State<GroupEditScreen> {
         name: _name.text,
         department: _dept,
         memberUids: _members.toList(),
+        originalMemberUids: widget.group?.memberUids,
       );
       if (mounted) Navigator.pop(context);
     } catch (e) {
@@ -245,13 +376,13 @@ class _GroupEditScreenState extends State<GroupEditScreen> {
   @override
   Widget build(BuildContext context) {
     final me = widget.me;
-    // Only people below you in your department (main admin: that department).
+    // Group admins may add or remove people in this department.
     final people = widget.users
         .where(
           (u) =>
               u.uid != me.uid &&
               u.department == _dept &&
-              Roles.canCall(me.role, u.role) &&
+              (widget.group != null || Roles.canCall(me.role, u.role)) &&
               (_q.isEmpty || u.name.toLowerCase().contains(_q)),
         )
         .toList();

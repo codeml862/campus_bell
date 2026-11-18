@@ -26,6 +26,16 @@ class _HierarchyScreenState extends State<HierarchyScreen> {
   String _q = '';
 
   @override
+  void didUpdateWidget(covariant HierarchyScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.me.department != widget.me.department ||
+        oldWidget.me.uid != widget.me.uid ||
+        !widget.me.isAdmin) {
+      _dept = widget.me.department;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final me = widget.me;
     return Scaffold(
@@ -45,7 +55,10 @@ class _HierarchyScreenState extends State<HierarchyScreen> {
                 me.department,
                 ...users.map((u) => u.department),
               }.where((d) => d.isNotEmpty).toList()..sort();
-              final inDept = users.where((u) => u.department == _dept).toList();
+              final department = me.isAdmin ? _dept : me.department;
+              final inDept = users
+                  .where((u) => u.department == department)
+                  .toList();
               final q = _q.toLowerCase();
               final shown = q.isEmpty
                   ? inDept
@@ -95,7 +108,7 @@ class _HierarchyScreenState extends State<HierarchyScreen> {
                     const SizedBox(height: 10),
                     _Tree(
                       me: me,
-                      dept: _dept,
+                      dept: department,
                       people: shown,
                       searching: q.isNotEmpty,
                     ),

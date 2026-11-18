@@ -200,6 +200,15 @@ class AppUser {
 
   bool get isAdmin => role == Roles.admin;
 
+  /// Email details are visible to the account owner, HODs and administrators.
+  bool canViewEmailOf(AppUser user) =>
+      isActive && (uid == user.uid || isAdmin || role == Roles.hod);
+
+  /// Students browse only people from their current department.
+  bool canSeeDirectoryUser(AppUser user) =>
+      role != Roles.student ||
+      (department.isNotEmpty && user.department == department);
+
   /// Role as shown to people, e.g. "HOD · Professor", "Lab Assistant".
   String get roleLabel {
     final r = Roles.normal(role);
@@ -384,6 +393,7 @@ class BellRequest {
 class Group {
   final String id, name, department, ownerUid;
   final List<String> memberUids;
+  final List<String> adminUids;
 
   const Group({
     required this.id,
@@ -391,6 +401,7 @@ class Group {
     required this.department,
     required this.ownerUid,
     required this.memberUids,
+    this.adminUids = const [],
   });
 
   factory Group.fromDoc(DocumentSnapshot<Map<String, dynamic>> d) {
@@ -401,6 +412,7 @@ class Group {
       department: m['department'] ?? '',
       ownerUid: m['ownerUid'] ?? '',
       memberUids: List<String>.from(m['memberUids'] ?? const []),
+      adminUids: List<String>.from(m['adminUids'] ?? const []),
     );
   }
 }

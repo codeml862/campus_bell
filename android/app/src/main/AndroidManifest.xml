@@ -31,6 +31,24 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <meta-data android:name="flutter_deeplinking_enabled" android:value="false" />
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="campusbell" android:host="join" />
+            </intent-filter>
+            <!-- Group invite links (https://campus-bell-seven.vercel.app/join/<id>)
+                 open the app directly when it is installed. Verified by
+                 portal/public/.well-known/assetlinks.json. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:host="campus-bell-seven.vercel.app" />
+                <data android:pathPrefix="/join/" />
+            </intent-filter>
         </activity>
         <!-- Shares CampusBell.apk with a real file name (Profile > Share). -->
         <provider

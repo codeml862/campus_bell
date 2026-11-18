@@ -168,13 +168,16 @@ class _HomeScreenState extends State<HomeScreen> {
                     child: _Tile(
                       icon: CupertinoIcons.clock,
                       title: 'History',
-                      subtitle: 'Your bells and requests',
                       onTap: () =>
                           _push(HistoryScreen(me: me, standalone: true)),
                     ),
                   ),
                 ],
               ),
+            ],
+            if (!canCall) ...[
+              const SizedBox(height: 10),
+              _RingGroupTile(me: me, onTap: _push),
             ],
             const SizedBox(height: 24),
             _SectionHead(
@@ -811,13 +814,12 @@ class _RingCircle extends StatelessWidget {
 
 class _Tile extends StatelessWidget {
   final IconData icon;
-  final String title, subtitle;
+  final String title;
   final Widget? badge;
   final VoidCallback onTap;
   const _Tile({
     required this.icon,
     required this.title,
-    required this.subtitle,
     required this.onTap,
     this.badge,
   });
@@ -851,13 +853,6 @@ class _Tile extends StatelessWidget {
             color: HomeColors.ink,
           ),
         ),
-        const SizedBox(height: 2),
-        Text(
-          subtitle,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 13.5, color: HomeColors.sub),
-        ),
       ],
     ),
   );
@@ -868,23 +863,10 @@ class _RingGroupTile extends StatelessWidget {
   final void Function(Widget) onTap;
   const _RingGroupTile({required this.me, required this.onTap});
   @override
-  Widget build(BuildContext context) => StreamBuilder<List<Group>>(
-    stream: GroupService.mine(me),
-    builder: (_, snap) {
-      final n = ringableGroups(me, snap.data ?? const []).length;
-      return _Tile(
-        icon: CupertinoIcons.person_2,
-        title: 'Ring group',
-        subtitle: 'First to accept goes',
-        badge: snap.hasData
-            ? Text(
-                '$n group${n == 1 ? '' : 's'}',
-                style: const TextStyle(fontSize: 13.5, color: HomeColors.sub),
-              )
-            : null,
-        onTap: () => onTap(RingGroupScreen(me: me)),
-      );
-    },
+  Widget build(BuildContext context) => _Tile(
+    icon: CupertinoIcons.person_2,
+    title: me.role == Roles.student ? 'My groups' : 'Ring group',
+    onTap: () => onTap(RingGroupScreen(me: me)),
   );
 }
 
@@ -905,7 +887,6 @@ class _AnnounceTile extends StatelessWidget {
           return _Tile(
             icon: CupertinoIcons.speaker_2,
             title: 'Notices',
-            subtitle: 'From your department',
             badge: unseen > 0
                 ? _Badge(
                     '$unseen new',
@@ -918,18 +899,10 @@ class _AnnounceTile extends StatelessWidget {
         },
       );
     }
-    return StreamBuilder<List<Announcement>>(
-      stream: AnnouncementService.sentBy(me.uid),
-      builder: (_, snap) {
-        final last = (snap.data ?? const <Announcement>[]).firstOrNull;
-        return _Tile(
-          icon: CupertinoIcons.speaker_2,
-          title: 'Announce',
-          subtitle: 'Notice to dept or year',
-          badge: last == null ? null : SeenBadge(notice: last),
-          onTap: () => onTap(AnnounceScreen(me: me)),
-        );
-      },
+    return _Tile(
+      icon: CupertinoIcons.speaker_2,
+      title: 'Announce',
+      onTap: () => onTap(AnnounceScreen(me: me)),
     );
   }
 }
@@ -1336,6 +1309,5 @@ InputDecoration plainInput(String hint) => InputDecoration(
 );
 
 /// Groups [me] may ring: own groups, or any the role can manage.
-List<Group> ringableGroups(AppUser me, List<Group> all) => all
-    .where((g) => g.ownerUid == me.uid || GroupService.canManage(me, g))
-    .toList();
+List<Group> ringableGroups(AppUser me, List<Group> all) =>
+    all.where((g) => GroupService.canRing(me, g)).toList();

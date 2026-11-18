@@ -331,14 +331,19 @@ class BellService {
           ),
       );
 
-  static Stream<List<AppUser>> users() => usersCol.snapshots().map(
-    (s) =>
-        s.docs.map(AppUser.fromDoc).where((u) => u.isActive).toList()
-          ..sort((a, b) => a.name.compareTo(b.name)),
-  );
+  static Stream<List<AppUser>> users({String? department}) =>
+      (department == null
+              ? usersCol
+              : usersCol.where('department', isEqualTo: department))
+          .snapshots()
+          .map(
+            (s) =>
+                s.docs.map(AppUser.fromDoc).where((u) => u.isActive).toList()
+                  ..sort((a, b) => a.name.compareTo(b.name)),
+          );
 }
 
-/// Groups a HOD (own department) or the main administrator can ring at once.
+/// Department groups owned by teaching staff, HODs or administrators.
 class GroupService {
   /// Groups I own or belong to; the main administrator sees all.
   static Stream<List<Group>> mine(AppUser me) {
@@ -352,7 +357,9 @@ class GroupService {
               .where(
                 (g) =>
                     me.isAdmin ||
+                    (me.role == Roles.hod && g.department == me.department) ||
                     g.ownerUid == me.uid ||
+                    g.adminUids.contains(me.uid) ||
                     g.memberUids.contains(me.uid),
               )
               .toList()
@@ -361,8 +368,17 @@ class GroupService {
   }
 
   static bool canManage(AppUser me, Group? g) =>
-      me.isAdmin ||
-      (me.role == Roles.hod && (g == null || g.department == me.department));
+      me.isActive &&
+      (me.isAdmin ||
+          (me.role == Roles.hod &&
+              (g == null || g.department == me.department)) ||
+          (g == null && Roles.faculty.contains(me.role)) ||
+          (g != null &&
+              g.department == me.department &&
+              (g.ownerUid == me.uid || g.adminUids.contains(me.uid))));
+
+  static bool canRing(AppUser me, Group g) =>
+      Roles.canCallAnyone(me.role) && canManage(me, g);
 
   static Future<void> save({
     required AppUser me,
@@ -370,21 +386,102 @@ class GroupService {
     required String name,
     required String department,
     required List<String> memberUids,
-  }) {
+    List<String>? originalMemberUids,
+  }) async {
+    final existing = id == null ? null : await groupsCol.doc(id).get();
+    if (!canManage(me, existing == null ? null : Group.fromDoc(existing)) ||
+        (!me.isAdmin && department != me.department)) {
+      throw 'You cannot manage this group.';
+    }
+    if (memberUids.toSet().length > 100) {
+      throw 'A group can have up to 100 members.';
+    }
     final data = {
       'name': name.trim(),
       'department': department,
-      'memberUids': memberUids,
+      'memberUids': memberUids.toSet().toList(),
       'updatedAt': FieldValue.serverTimestamp(),
     };
-    return id == null
-        ? groupsCol.add({
-            ...data,
-            'ownerUid': me.uid,
-            'createdAt': FieldValue.serverTimestamp(),
-          })
-        : groupsCol.doc(id).update(data);
+    if (id == null) {
+      await groupsCol.add({
+        ...data,
+        'ownerUid': me.uid,
+        'adminUids': <String>[],
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    } else {
+      // Preserve students who joined through a link while the editor was open.
+      final original =
+          (originalMemberUids ?? Group.fromDoc(existing!).memberUids).toSet();
+      await db.runTransaction((transaction) async {
+        final ref = groupsCol.doc(id);
+        final latest = Group.fromDoc(await transaction.get(ref));
+        final merged = {...latest.memberUids, ...memberUids};
+        merged.removeAll(original.difference(memberUids.toSet()));
+        if (merged.length > 100) throw 'A group can have up to 100 members.';
+        transaction.update(ref, {
+          ...data,
+          'memberUids': merged.toList(),
+          'adminUids': latest.adminUids.where(merged.contains).toList(),
+        });
+      });
+    }
   }
+
+  static Future<void> setAdmin(
+    AppUser me,
+    String groupId,
+    String uid,
+    bool value,
+  ) => db.runTransaction((transaction) async {
+    final ref = groupsCol.doc(groupId);
+    final groupDoc = await transaction.get(ref);
+    final userDoc = await transaction.get(usersCol.doc(uid));
+    if (!groupDoc.exists || !userDoc.exists) {
+      throw 'Group or member no longer exists.';
+    }
+    final group = Group.fromDoc(groupDoc);
+    final member = AppUser.fromDoc(userDoc);
+    if (!canManage(me, group)) throw 'Only group admins can change admins.';
+    if (uid == group.ownerUid) throw 'The group creator remains an admin.';
+    if (!group.memberUids.contains(uid) ||
+        !member.isActive ||
+        member.department != group.department) {
+      throw 'Choose an active member of this department.';
+    }
+    transaction.update(ref, {
+      'adminUids': value
+          ? FieldValue.arrayUnion([uid])
+          : FieldValue.arrayRemove([uid]),
+    });
+  });
+
+  /// The link holder adds only their own account, once, after sign-in.
+  static Future<Group> join(String id) =>
+      db.runTransaction((transaction) async {
+        final uid = auth.currentUser?.uid;
+        if (uid == null) throw 'Sign in to join this group.';
+        final profile = await transaction.get(usersCol.doc(uid));
+        final doc = await transaction.get(groupsCol.doc(id));
+        if (!profile.exists || !doc.exists) {
+          throw 'This group is no longer available.';
+        }
+        final me = AppUser.fromDoc(profile);
+        final group = Group.fromDoc(doc);
+        if (!me.isActive || me.role != Roles.student) {
+          throw 'Only active students can join using a group link.';
+        }
+        if (group.department != me.department) {
+          throw 'This group belongs to another department.';
+        }
+        if (!group.memberUids.contains(uid)) {
+          if (group.memberUids.length >= 100) throw 'This group is full.';
+          transaction.update(doc.reference, {
+            'memberUids': FieldValue.arrayUnion([uid]),
+          });
+        }
+        return group;
+      });
 
   static Future<void> delete(String id) => groupsCol.doc(id).delete();
 }

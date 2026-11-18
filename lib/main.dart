@@ -15,6 +15,7 @@ import 'screens/request_details/request_details_screen.dart';
 import 'screens/splash/splash_screen.dart';
 import 'services/notifications.dart';
 import 'services/services.dart';
+import 'services/group_links.dart';
 import 'services/update_service.dart';
 import 'widgets/common.dart';
 
@@ -30,6 +31,7 @@ Future<void> _bgHandler(RemoteMessage m) async {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  GroupLinks.init();
   // Draw behind a fully transparent status/navigation bar (no grey strip).
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   SystemChrome.setSystemUIOverlayStyle(
@@ -158,7 +160,10 @@ class AuthGate extends StatelessWidget {
             if (!s.data!.exists) return const RoleScreen();
             final me = AppUser.fromDoc(s.data!);
             if (!me.isActive) return const _Disabled();
-            return _Registered(me: me);
+            return _Registered(
+              key: ValueKey('${me.uid}:${me.department}:${me.role}'),
+              me: me,
+            );
           },
         );
       },
@@ -169,22 +174,50 @@ class AuthGate extends StatelessWidget {
 /// Registers this device for pushes once per login, then shows the app.
 class _Registered extends StatefulWidget {
   final AppUser me;
-  const _Registered({required this.me});
+  const _Registered({super.key, required this.me});
   @override
   State<_Registered> createState() => _RegisteredState();
 }
 
 class _RegisteredState extends State<_Registered> {
+  bool _joining = false;
+
   @override
   void initState() {
     super.initState();
+    GroupLinks.pending.addListener(_joinGroup);
     TokenService.register(widget.me.uid);
     // Let bells ring full screen over the lock screen (Android 14+).
     NotificationService.requestFullScreen();
     // Ask to update if a newer APK is published (Firestore config/app).
-    WidgetsBinding.instance.addPostFrameCallback(
-      (_) => UpdateService.check(context),
-    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _joinGroup();
+      UpdateService.check(context);
+    });
+  }
+
+  Future<void> _joinGroup() async {
+    final id = GroupLinks.pending.value;
+    if (!mounted || _joining || id == null) return;
+    _joining = true;
+    try {
+      final group = await GroupService.join(id);
+      if (mounted) {
+        showSnack(context, 'Joined ${group.name}. Find it in Groups.');
+      }
+    } catch (e) {
+      if (mounted) showSnack(context, 'Could not join group: $e');
+    } finally {
+      if (GroupLinks.pending.value == id) GroupLinks.pending.value = null;
+      _joining = false;
+      if (mounted && GroupLinks.pending.value != null) _joinGroup();
+    }
+  }
+
+  @override
+  void dispose() {
+    GroupLinks.pending.removeListener(_joinGroup);
+    super.dispose();
   }
 
   @override

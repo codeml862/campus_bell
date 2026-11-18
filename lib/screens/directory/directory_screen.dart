@@ -34,6 +34,7 @@ class _DirectoryScreenState extends State<DirectoryScreen> {
   static const _filters = ['All', 'HOD', 'Faculty', 'Lab staff', 'Student'];
 
   bool _match(AppUser u) {
+    if (!widget.me.canSeeDirectoryUser(u)) return false;
     final roleOk = switch (_filter) {
       1 => u.role == Roles.hod,
       2 => Roles.faculty.contains(u.role),
@@ -52,6 +53,7 @@ class _DirectoryScreenState extends State<DirectoryScreen> {
 
   void _open(AppUser u) {
     final me = widget.me;
+    if (!me.canSeeDirectoryUser(u)) return;
     final page = widget.callMode && Roles.canCall(me.role, u.role)
         ? CallScreen(me: me, to: u)
         : UserDetailsScreen(me: me, user: u);
@@ -157,7 +159,9 @@ class _DirectoryScreenState extends State<DirectoryScreen> {
   }
 
   Widget _list() => StreamBuilder<List<AppUser>>(
-    stream: BellService.users(),
+    stream: BellService.users(
+      department: widget.me.role == Roles.student ? widget.me.department : null,
+    ),
     builder: (_, snap) {
       if (snap.hasError) {
         return Center(child: Text('Could not load: ${snap.error}'));
