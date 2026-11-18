@@ -201,12 +201,34 @@ class _RegisteredState extends State<_Registered> {
     if (!mounted || _joining || id == null) return;
     _joining = true;
     try {
-      final group = await GroupService.join(id);
+      final result = await GroupService.join(id);
       if (mounted) {
-        showSnack(context, 'Joined ${group.name}. Find it in Groups.');
+        final name = result.name.isEmpty ? 'the group' : result.name;
+        showSnack(
+          context,
+          result.alreadyMember
+              ? 'You are already in $name.'
+              : 'Joined $name. Find it in Groups.',
+        );
+      }
+    } on JoinException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.message),
+            duration: const Duration(seconds: 6),
+            // Temporary failures (no internet, server busy) can be retried.
+            action: e.retryable
+                ? SnackBarAction(
+                    label: 'Retry',
+                    onPressed: () => GroupLinks.pending.value = id,
+                  )
+                : null,
+          ),
+        );
       }
     } catch (e) {
-      if (mounted) showSnack(context, 'Could not join group: $e');
+      if (mounted) showSnack(context, 'Could not join the group. Try again.');
     } finally {
       if (GroupLinks.pending.value == id) GroupLinks.pending.value = null;
       _joining = false;

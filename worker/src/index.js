@@ -21,7 +21,9 @@ const canRequest = (from, to) => from !== "Administrator" && rank(from) > rank(t
 
 export default {
   async fetch(req, env) {
-    if (req.method !== "POST" || new URL(req.url).pathname !== "/notify") {
+    const path = new URL(req.url).pathname;
+    if (req.method === "POST" && path === "/join-group") return joinGroup(req, env);
+    if (req.method !== "POST" || path !== "/notify") {
       return json({ error: "not found" }, 404);
     }
     try {
@@ -53,6 +55,85 @@ export default {
     }
   },
 };
+
+// ---------- Group invite links ----------
+// POST /join-group {groupId} with the student's Firebase ID token.
+// Adds only the caller to the group, after checking on the server that they
+// are an active student of the group's department. Responses:
+//   200 {ok, groupId, name, alreadyMember}
+//   4xx {code, error}  code: unauthenticated | bad_request | not_found |
+//                       profile_missing | disabled | not_student |
+//                       wrong_department | group_full
+const MAX_GROUP_MEMBERS = 100;
+
+class JoinError extends Error {
+  constructor(status, code, message) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+async function joinGroup(req, env) {
+  try {
+    const idToken = (req.headers.get("Authorization") || "").replace(/^Bearer /, "");
+    let uid;
+    try {
+      uid = await verifyIdToken(idToken, env.PROJECT_ID);
+    } catch {
+      throw new JoinError(401, "unauthenticated", "Please sign in again to join this group.");
+    }
+    let body;
+    try {
+      body = await req.json();
+    } catch {
+      throw new JoinError(400, "bad_request", "Invalid request.");
+    }
+    const groupId = body && body.groupId;
+    if (typeof groupId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(groupId)) {
+      throw new JoinError(400, "bad_request", "This group link is not valid.");
+    }
+
+    const g = new Google(env);
+    const user = await g.get(`users/${uid}`);
+    if (!user) {
+      throw new JoinError(403, "profile_missing", "Finish setting up your profile, then open the link again.");
+    }
+    if (user.status === "disabled") {
+      throw new JoinError(403, "disabled", "Your account is disabled. Contact your department.");
+    }
+    if (normal(user.role) !== "Student") {
+      throw new JoinError(403, "not_student", "Only students can join a group with a link.");
+    }
+
+    // Optimistic transaction: write only if the group is unchanged since read.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const raw = await g.getRaw(`groups/${groupId}`);
+      if (!raw) throw new JoinError(404, "not_found", "This group no longer exists. Ask your teacher for a new link.");
+      const group = decodeDoc(raw);
+      if (group.department !== user.department) {
+        throw new JoinError(403, "wrong_department", "This group belongs to another department.");
+      }
+      const members = Array.isArray(group.memberUids) ? group.memberUids : [];
+      if (members.includes(uid)) {
+        return json({ ok: true, groupId, name: group.name || "", alreadyMember: true });
+      }
+      if (members.length >= MAX_GROUP_MEMBERS) {
+        throw new JoinError(409, "group_full", "This group is full.");
+      }
+      const committed = await g.appendMember(`groups/${groupId}`, uid, raw.updateTime);
+      if (committed) {
+        return json({ ok: true, groupId, name: group.name || "", alreadyMember: false });
+      }
+      // Someone else changed the group meanwhile: read again and retry.
+    }
+    throw new JoinError(503, "busy", "The group is busy right now. Please try again.");
+  } catch (e) {
+    if (e instanceof JoinError) return json({ code: e.code, error: e.message }, e.status);
+    console.error("join-group failed", e);
+    return json({ code: "server_error", error: "Could not join the group. Please try again." }, 500);
+  }
+}
 
 // "on" / "off" for this user's phone right now: off when the ringer is
 // silenced, or when they are in a timetable class (unless the bell is urgent).
@@ -270,10 +351,43 @@ class Google {
   }
 
   async get(path) {
+    const raw = await this.getRaw(path);
+    return raw && decodeDoc(raw);
+  }
+
+  // The Firestore document as returned by REST (keeps updateTime).
+  async getRaw(path) {
     const r = await this.call(`${this.base}/${path}`);
     if (r.status === 404) return null;
     if (!r.ok) throw new Error(`Firestore read failed (${r.status})`);
-    return decodeDoc(await r.json());
+    return r.json();
+  }
+
+  // arrayUnion(uid) on memberUids, only if the doc is still at updateTime.
+  // Returns false when the precondition failed (concurrent change).
+  async appendMember(path, uid, updateTime) {
+    const r = await this.call(`${this.base.replace(/\/documents$/, "/documents:commit")}`, {
+      method: "POST",
+      body: JSON.stringify({
+        writes: [{
+          transform: {
+            document: `projects/${this.project}/databases/(default)/documents/${path}`,
+            fieldTransforms: [{
+              fieldPath: "memberUids",
+              appendMissingElements: { values: [{ stringValue: uid }] },
+            }],
+          },
+          currentDocument: { updateTime },
+        }],
+      }),
+    });
+    if (r.ok) return true;
+    if (r.status === 400 || r.status === 409) {
+      const err = await r.json().catch(() => ({}));
+      const status = err.error && err.error.status;
+      if (status === "FAILED_PRECONDITION" || status === "ABORTED") return false;
+    }
+    throw new Error(`Firestore commit failed (${r.status})`);
   }
 
   async patch(path, data) {

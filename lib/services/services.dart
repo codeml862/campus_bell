@@ -456,32 +456,51 @@ class GroupService {
     });
   });
 
-  /// The link holder adds only their own account, once, after sign-in.
-  static Future<Group> join(String id) =>
-      db.runTransaction((transaction) async {
-        final uid = auth.currentUser?.uid;
-        if (uid == null) throw 'Sign in to join this group.';
-        final profile = await transaction.get(usersCol.doc(uid));
-        final doc = await transaction.get(groupsCol.doc(id));
-        if (!profile.exists || !doc.exists) {
-          throw 'This group is no longer available.';
-        }
-        final me = AppUser.fromDoc(profile);
-        final group = Group.fromDoc(doc);
-        if (!me.isActive || me.role != Roles.student) {
-          throw 'Only active students can join using a group link.';
-        }
-        if (group.department != me.department) {
-          throw 'This group belongs to another department.';
-        }
-        if (!group.memberUids.contains(uid)) {
-          if (group.memberUids.length >= 100) throw 'This group is full.';
-          transaction.update(doc.reference, {
-            'memberUids': FieldValue.arrayUnion([uid]),
-          });
-        }
-        return group;
-      });
+  /// The link holder joins a group. The push server verifies the caller's
+  /// ID token and that they are an active student of the group's department,
+  /// then adds only their own account (see worker `/join-group`).
+  static Future<JoinResult> join(String id) async {
+    final user = auth.currentUser;
+    if (user == null) {
+      throw const JoinException('unauthenticated', 'Sign in to join this group.');
+    }
+    final http.Response r;
+    try {
+      final idToken = await user.getIdToken();
+      r = await http
+          .post(
+            Uri.parse('$pushServerUrl/join-group'),
+            headers: {
+              'Authorization': 'Bearer $idToken',
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode({'groupId': id}),
+          )
+          .timeout(const Duration(seconds: 20));
+    } catch (_) {
+      throw const JoinException(
+        'network',
+        'No connection. Check your internet and try again.',
+      );
+    }
+    Map<String, dynamic> body;
+    try {
+      body = jsonDecode(r.body) as Map<String, dynamic>;
+    } catch (_) {
+      body = const {};
+    }
+    if (r.statusCode == 200 && body['ok'] == true) {
+      return JoinResult(
+        name: (body['name'] ?? '').toString(),
+        alreadyMember: body['alreadyMember'] == true,
+      );
+    }
+    throw JoinException(
+      (body['code'] ?? 'server_error').toString(),
+      (body['error'] ?? 'Could not join the group. Please try again.')
+          .toString(),
+    );
+  }
 
   static Future<void> delete(String id) => groupsCol.doc(id).delete();
 }
@@ -590,4 +609,21 @@ class TimetableService {
         'prefs.quietInClass': on,
         'prefs.tzOffset': DateTime.now().timeZoneOffset.inMinutes,
       });
+}
+
+/// Outcome of joining a group from an invite link.
+class JoinResult {
+  final String name;
+  final bool alreadyMember;
+  const JoinResult({required this.name, required this.alreadyMember});
+}
+
+/// Why a group invite could not be used. [retryable] errors are temporary.
+class JoinException implements Exception {
+  final String code, message;
+  const JoinException(this.code, this.message);
+  bool get retryable =>
+      code == 'network' || code == 'server_error' || code == 'busy';
+  @override
+  String toString() => message;
 }
